@@ -1,88 +1,108 @@
 import sys
-from collections import deque, defaultdict
+from collections import deque
 import heapq
 
 
 def min_steps_to_collect_all_keys(grid):
-    n, m = len(grid), len(grid[0])
-    robots = []
+    height = len(grid)
+    width = len(grid[0]) if height > 0 else 0
+
+    start_positions = []
     key_positions = {}
-    for i in range(n):
-        for j in range(m):
-            c = grid[i][j]
-            if c == '@':
-                robots.append((i, j))
-            elif 'a' <= c <= 'z':
-                key_positions[c] = (i, j)
-    K = len(key_positions)
-    if K == 0:
+    for i in range(height):
+        for j in range(width):
+            cell = grid[i][j]
+            if cell == '@':
+                start_positions.append((i, j))
+            elif cell.islower():
+                key_positions[cell] = (i, j)
+    num_keys = len(key_positions)
+    if num_keys == 0:
         return 0
 
-    keys = sorted(key_positions.keys())
-    key_index = {k: idx for idx, k in enumerate(keys)}
+    keys_sorted = sorted(key_positions.keys())
+    letter_to_bit = {letter: idx for idx, letter in enumerate(keys_sorted)}
+    bit_to_letter = {idx: letter for letter, idx in letter_to_bit.items()}
 
-    sources = robots + [key_positions[k] for k in keys]
-    S = len(sources)
+    points = []
+    for pos in start_positions:
+        points.append(pos)
+    for letter in keys_sorted:
+        points.append(key_positions[letter])
+    point_index = {pos: idx for idx, pos in enumerate(points)}
 
-    dist = [dict() for _ in range(S)]
-    req = [dict() for _ in range(S)]
-    door_bit = {k.upper(): 1 << key_index[k] for k in keys}
+    def bfs(start_idx):
+        sx, sy = points[start_idx]
+        visited = {(sx, sy): [0]}
+        queue = deque([(sx, sy, 0, 0)])
+        results = {}
 
-    for s, (si, sj) in enumerate(sources):
-        q = deque([(si, sj, 0, 0)])
-        seen = set([(si, sj)])
-        while q:
-            i, j, d, doors_mask = q.popleft()
-            c = grid[i][j]
-            if 'a' <= c <= 'z':
-                ki = key_index[c]
-                dist[s][ki] = d
-                req[s][ki] = doors_mask
-            for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                ni, nj = i + di, j + dj
-                if not (0 <= ni < n and 0 <= nj < m): continue
-                if (ni, nj) in seen: continue
-                ch = grid[ni][nj]
-                if ch == '#': continue
-                new_mask = doors_mask
-                if 'A' <= ch <= 'Z' and ch in door_bit:
-                    new_mask |= door_bit[ch]
-                seen.add((ni, nj))
-                q.append((ni, nj, d + 1, new_mask))
+        while queue:
+            x, y, req_mask, dist = queue.popleft()
+            cell = grid[x][y]
+            if cell.islower():
+                key_bit = letter_to_bit[cell]
+                if point_index[(x, y)] != start_idx:
+                    results.setdefault(key_bit, []).append((req_mask, dist))
+            for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
+                nx, ny = x + dx, y + dy
+                if not (0 <= nx < height and 0 <= ny < width):
+                    continue
+                cell = grid[nx][ny]
+                if cell == '#':
+                    continue
+                new_mask = req_mask
+                if cell.isupper():
+                    door_bit = letter_to_bit[cell.lower()]
+                    new_mask |= (1 << door_bit)
+                if (nx, ny) not in visited:
+                    visited[(nx, ny)] = [new_mask]
+                    queue.append((nx, ny, new_mask, dist + 1))
+                else:
+                    skip = False
+                    for mask_old in visited[(nx, ny)]:
+                        if mask_old | new_mask == new_mask:
+                            skip = True
+                            break
+                    if skip:
+                        continue
+                    visited[(nx, ny)].append(new_mask)
+                    queue.append((nx, ny, new_mask, dist + 1))
+        return results
 
-    ALL_KEYS = (1 << K) - 1
+    reachable = [None] * len(points)
+    for idx in range(len(points)):
+        reachable[idx] = bfs(idx)
 
-    init_pos = tuple(range(4))
-    min_dist = {}
-    heap = [(0, init_pos, 0)]
-    min_dist[(init_pos, 0)] = 0
+    start_state_positions = tuple(
+        sorted(point_index[pos] for pos in start_positions))
+    start_keys_mask = 0
+    target_mask = (1 << num_keys) - 1
+    pq = [(0, start_state_positions, start_keys_mask)]
+    visited_states = {(start_state_positions, start_keys_mask): 0}
 
-    while heap:
-        steps, positions, mask = heapq.heappop(heap)
-        if min_dist.get((positions, mask), 1 << 60) < steps:
+    while pq:
+        dist, positions, keys_mask = heapq.heappop(pq)
+        if visited_states[(positions, keys_mask)] < dist:
             continue
-        if mask == ALL_KEYS:
-            return steps
-
-        for r in range(4):
-            src = positions[r]
-            for ki, d in dist[src].items():
-                bit = 1 << ki
-                if mask & bit:
+        if keys_mask == target_mask:
+            return dist
+        for robot_idx, pos_idx in enumerate(positions):
+            for key_bit, paths in reachable[pos_idx].items():
+                if keys_mask & (1 << key_bit):
                     continue
-                if req[src][ki] & ~mask:
-                    continue
-                new_pos = list(positions)
-                new_pos[r] = 4 + ki
-                new_pos = tuple(new_pos)
-                new_mask = mask | bit
-                new_steps = steps + d
-                state = (new_pos, new_mask)
-                if new_steps < min_dist.get(state, 1 << 60):
-                    min_dist[state] = new_steps
-                    heapq.heappush(heap, (new_steps, new_pos, new_mask))
-
-    return -1
+                for req_mask, step_dist in paths:
+                    if req_mask & keys_mask == req_mask:
+                        new_keys_mask = keys_mask | (1 << key_bit)
+                        target_pos_idx = point_index[key_positions[bit_to_letter[key_bit]]]
+                        new_positions = list(positions)
+                        new_positions[robot_idx] = target_pos_idx
+                        new_positions = tuple(sorted(new_positions))
+                        new_dist = dist + step_dist
+                        state = (new_positions, new_keys_mask)
+                        if state not in visited_states or visited_states[state] > new_dist:
+                            visited_states[state] = new_dist
+                            heapq.heappush(pq, (new_dist, new_positions, new_keys_mask))
 
 
 def main():
