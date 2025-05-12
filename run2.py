@@ -4,105 +4,154 @@ import heapq
 
 
 def min_steps_to_collect_all_keys(grid):
-    height = len(grid)
-    width = len(grid[0]) if height > 0 else 0
+    H = len(grid)
+    W = len(grid[0]) if H else 0
 
-    start_positions = []
-    key_positions = {}
-    for i in range(height):
-        for j in range(width):
-            cell = grid[i][j]
-            if cell == '@':
-                start_positions.append((i, j))
-            elif cell.islower():
-                key_positions[cell] = (i, j)
-    num_keys = len(key_positions)
-    if num_keys == 0:
+    robots = []
+    keys = {}
+    for i in range(H):
+        for j in range(W):
+            c = grid[i][j]
+            if c == '@':
+                robots.append((i, j))
+            elif 'a' <= c <= 'z':
+                keys[c] = (i, j)
+
+    Rn = len(robots)
+    Kn = len(keys)
+    if Kn == 0:
         return 0
 
-    keys_sorted = sorted(key_positions.keys())
-    letter_to_bit = {letter: idx for idx, letter in enumerate(keys_sorted)}
-    bit_to_letter = {idx: letter for letter, idx in letter_to_bit.items()}
+    key_list = sorted(keys)
+    k2i = {k: idx for idx, k in enumerate(key_list)}
+    ki2pos = {k2i[k]: pos for k, pos in keys.items()}
 
-    points = []
-    for pos in start_positions:
-        points.append(pos)
-    for letter in keys_sorted:
-        points.append(key_positions[letter])
-    point_index = {pos: idx for idx, pos in enumerate(points)}
+    total_nodes = Kn + Rn
+    robot_offsets = {Kn + r: robots[r] for r in range(Rn)}
 
-    def bfs(start_idx):
-        sx, sy = points[start_idx]
-        visited = {(sx, sy): [0]}
-        queue = deque([(sx, sy, 0, 0)])
-        results = {}
-
-        while queue:
-            x, y, req_mask, dist = queue.popleft()
-            cell = grid[x][y]
-            if cell.islower():
-                key_bit = letter_to_bit[cell]
-                if point_index[(x, y)] != start_idx:
-                    results.setdefault(key_bit, []).append((req_mask, dist))
-            for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
+    dist_free = {n: {} for n in range(total_nodes)}
+    for node in range(total_nodes):
+        sx, sy = ki2pos[node] if node < Kn else robot_offsets[node]
+        seen = [[False] * W for _ in range(H)]
+        dq = deque([(sx, sy, 0)])
+        seen[sx][sy] = True
+        while dq:
+            x, y, d = dq.popleft()
+            ch = grid[x][y]
+            if 'a' <= ch <= 'z':
+                dist_free[node][k2i[ch]] = d
+            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                 nx, ny = x + dx, y + dy
-                if not (0 <= nx < height and 0 <= ny < width):
-                    continue
-                cell = grid[nx][ny]
-                if cell == '#':
-                    continue
-                new_mask = req_mask
-                if cell.isupper():
-                    door_bit = letter_to_bit[cell.lower()]
-                    new_mask |= (1 << door_bit)
-                if (nx, ny) not in visited:
-                    visited[(nx, ny)] = [new_mask]
-                    queue.append((nx, ny, new_mask, dist + 1))
-                else:
-                    skip = False
-                    for mask_old in visited[(nx, ny)]:
-                        if mask_old | new_mask == new_mask:
+                if 0 <= nx < H and 0 <= ny < W and not seen[nx][ny] and grid[nx][ny] != '#':
+                    seen[nx][ny] = True
+                    dq.append((nx, ny, d + 1))
+
+    graph = {n: {} for n in range(total_nodes)}
+    for node in range(total_nodes):
+        sx, sy = ki2pos[node] if node < Kn else robot_offsets[node]
+        visited = {(sx, sy): [0]}
+        dq = deque([(sx, sy, 0, 0)])
+        while dq:
+            x, y, d, mask = dq.popleft()
+            ch = grid[x][y]
+            if 'a' <= ch <= 'z':
+                ki = k2i[ch]
+                if ki != node:
+                    graph[node].setdefault(ki, []).append((mask, d))
+            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nx, ny = x + dx, y + dy
+                if not (0 <= nx < H and 0 <= ny < W): continue
+                if grid[nx][ny] == '#': continue
+                m2 = mask
+                cc = grid[nx][ny]
+                if 'A' <= cc <= 'Z':
+                    m2 |= 1 << k2i[cc.lower()]
+                p = (nx, ny)
+                skip = False
+                if p in visited:
+                    for old in visited[p]:
+                        if old | m2 == m2:
                             skip = True
                             break
-                    if skip:
-                        continue
-                    visited[(nx, ny)].append(new_mask)
-                    queue.append((nx, ny, new_mask, dist + 1))
-        return results
+                if skip:
+                    continue
+                if p in visited:
+                    visited[p] = [o for o in visited[p] if not (m2 | o == o)]
+                    visited[p].append(m2)
+                else:
+                    visited[p] = [m2]
+                dq.append((nx, ny, d + 1, m2))
+        for ki, lst in list(graph[node].items()):
+            lst.sort(key=lambda x: x[1])
+            keep = []
+            for m, d in lst:
+                dominated = False
+                for pm, pd in keep:
+                    if (pm | m) == m and pd <= d:
+                        dominated = True
+                        break
+                if dominated:
+                    continue
+                keep = [(pm, pd) for pm, pd in keep if not ((m | pm) == pm and d <= pd)]
+                keep.append((m, d))
+            graph[node][ki] = keep
 
-    reachable = [None] * len(points)
-    for idx in range(len(points)):
-        reachable[idx] = bfs(idx)
+    ALL = (1 << Kn) - 1
+    start = tuple(sorted(Kn + r for r in range(Rn)))
+    pq = [(0, 0, start, 0)]
+    best = {(start, 0): 0}
 
-    start_state_positions = tuple(
-        sorted(point_index[pos] for pos in start_positions))
-    start_keys_mask = 0
-    target_mask = (1 << num_keys) - 1
-    pq = [(0, start_state_positions, start_keys_mask)]
-    visited_states = {(start_state_positions, start_keys_mask): 0}
+    def mst(pos_tuple, kmask):
+        rem = [i for i in range(Kn) if not (kmask & (1 << i))]
+        if not rem:
+            return 0
+        conn = set(pos_tuple)
+        md = {i: float('inf') for i in rem}
+        for i in rem:
+            for v in conn:
+                if v in dist_free and i in dist_free[v]:
+                    d = dist_free[v][i]
+                    if d < md[i]:
+                        md[i] = d
+        cost = 0
+        while rem:
+            nxt = min(rem, key=lambda x: md[x])
+            if md[nxt] == float('inf'):
+                return float('inf')
+            cost += md[nxt]
+            conn.add(nxt)
+            rem.remove(nxt)
+            for j in rem:
+                if nxt in dist_free and j in dist_free[nxt]:
+                    d = dist_free[nxt][j]
+                    if d < md[j]:
+                        md[j] = d
+        return cost
 
     while pq:
-        dist, positions, keys_mask = heapq.heappop(pq)
-        if visited_states[(positions, keys_mask)] < dist:
+        f, g, pos, km = heapq.heappop(pq)
+        if best.get((pos, km), 1e18) != g:
             continue
-        if keys_mask == target_mask:
-            return dist
-        for robot_idx, pos_idx in enumerate(positions):
-            for key_bit, paths in reachable[pos_idx].items():
-                if keys_mask & (1 << key_bit):
+        if km == ALL:
+            return g
+        for ridx, nid in enumerate(pos):
+            for tgt, opts in graph[nid].items():
+                bit = 1 << tgt
+                if km & bit:
                     continue
-                for req_mask, step_dist in paths:
-                    if req_mask & keys_mask == req_mask:
-                        new_keys_mask = keys_mask | (1 << key_bit)
-                        target_pos_idx = point_index[key_positions[bit_to_letter[key_bit]]]
-                        new_positions = list(positions)
-                        new_positions[robot_idx] = target_pos_idx
-                        new_positions = tuple(sorted(new_positions))
-                        new_dist = dist + step_dist
-                        state = (new_positions, new_keys_mask)
-                        if state not in visited_states or visited_states[state] > new_dist:
-                            visited_states[state] = new_dist
-                            heapq.heappush(pq, (new_dist, new_positions, new_keys_mask))
+                for req, d in opts:
+                    if req & ~km:
+                        continue
+                    nk = km | bit
+                    new_pos = list(pos)
+                    new_pos[ridx] = tgt
+                    new_pos = tuple(sorted(new_pos))
+                    ng = g + d
+                    st = (new_pos, nk)
+                    if ng < best.get(st, 1e18):
+                        best[st] = ng
+                        h = mst(new_pos, nk)
+                        heapq.heappush(pq, (ng + h, ng, new_pos, nk))
 
 
 def main():
